@@ -3,6 +3,7 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const { Engine } = require('json-rules-engine');
+const levenshtein = require('fast-levenshtein');
 
 const app = express();
 const port = 3000;
@@ -18,92 +19,67 @@ async function start() {
   // Define a custom operator 'textSimilarity' for the rules engine
   engine.addOperator('textSimilarity', (factValue, jsonValue) => {
     const similarity = calculateSimilarity(factValue.text1, factValue.text2);
-    console.log('Calculated Similarity:', similarity); // Log similarity calculation
     return similarity >= jsonValue;
   });
 
-  // Rule to detect high similarity (80% or above)
-  const highSimilarityRule = {
+  // Single rule to handle both cases based on the similarity threshold
+  const similarityRule = {
     conditions: {
       all: [
         {
           fact: 'texts',
           operator: 'textSimilarity',
-          value: 80
+          value: 80 // Similarity threshold
         }
       ]
     },
     event: {
-      type: 'highSimilarity'
+      type: 'similarityCheck'
     }
   };
-  engine.addRule(highSimilarityRule);
-
-  // Rule to detect low similarity (below 80%)
-  const lowSimilarityRule = {
-    conditions: {
-      all: [
-        {
-          fact: 'texts',
-          operator: 'textSimilarity',
-          value: 80,
-          inverted: true // This will trigger if similarity is below 80%
-        }
-      ]
-    },
-    event: {
-      type: 'lowSimilarity'
-    }
-  };
-  engine.addRule(lowSimilarityRule);
-
-  // Messages to return based on the similarity event
-  const printEventType = {
-    highSimilarity: 'The texts are similar',
-    lowSimilarity: 'The texts are not similar'
-  };
+  engine.addRule(similarityRule);
 
   // Endpoint to check text similarity
   app.post('/check-similarity', async (req, res) => {
     const { text1, text2 } = req.body;
-    console.log('Received texts:', { text1, text2 }); // Log received texts
 
     const facts = { texts: { text1, text2 } };
 
     try {
       // Run the rules engine with the given facts
-      const results = await engine.run(facts);
-      console.log('Rules Engine Results:', results); // Log results from the engine
+      await engine.run(facts);
 
-      // Determine the message based on the triggered event
-      const eventType = results.events.length > 0
-        ? results.events[0].type
-        : 'noMatch';
-      const message = printEventType[eventType] || 'No specific message';
-      console.log('Determined message:', message); // Log determined message
-
+      // Calculate similarity and determine the message
       const similarity = calculateSimilarity(text1, text2);
-      console.log('Similarity:', similarity); // Log similarity
+      let message = '';
+
+      if (similarity >= 80) {
+        message = 'The texts are similar';
+      } else {
+        message = 'The texts are not similar';
+      }
 
       res.json({ similarity, message });
     } catch (error) {
-      console.error('Error:', error.message); // Log errors
       res.status(500).json({ error: error.message });
     }
   });
 
   // Function to calculate the similarity between two texts
   function calculateSimilarity(text1, text2) {
-    const lowerText1 = text1.toLowerCase();
-    const lowerText2 = text2.toLowerCase();
+    // Normalize by removing extra whitespace and converting to lowercase
+    const normalizedText1 = text1.trim().replace(/\s+/g, ' ').toLowerCase();
+    const normalizedText2 = text2.trim().replace(/\s+/g, ' ').toLowerCase();
 
-    const words1 = lowerText1.split(' ');
-    const words2 = lowerText2.split(' ');
+    // Calculate Levenshtein distance
+    const distance = levenshtein.get(normalizedText1, normalizedText2);
 
-    const intersection = words1.filter(word => words2.includes(word)).length;
-    const union = new Set([...words1, ...words2]).size;
+    // Calculate the maximum possible length for normalization
+    const maxLength = Math.max(normalizedText1.length, normalizedText2.length);
 
-    return (intersection / union) * 100;
+    // Calculate similarity percentage
+    const similarity = ((maxLength - distance) / maxLength) * 100;
+    return similarity;
   }
 
   // Start the server

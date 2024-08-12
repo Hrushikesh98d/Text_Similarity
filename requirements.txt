@@ -1,3 +1,4 @@
 express
 body-parser
 json-rules-engine
+fast-levenshtein
